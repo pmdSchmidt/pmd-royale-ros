@@ -26,6 +26,11 @@ CameraNode::CameraNode(const rclcpp::NodeOptions &options)
       m_isPubGray(false),
       m_registeredPCListener(false),
       m_registeredIRListener(false),
+      m_cam_name(""),
+      m_node_name(""),
+      m_cam_access_code(""),
+      m_startUseCase(""),
+      m_currentUseCase(""),
       m_recording_file("") {
 
     unsigned int major;
@@ -51,6 +56,31 @@ CameraNode::CameraNode(const rclcpp::NodeOptions &options)
         RCLCPP_INFO(this->get_logger(), "Using access code : %s", accessCode.c_str());
     }
 
+    rcl_interfaces::msg::ParameterDescriptor nodeNameParameterDescriptor;
+    nodeNameParameterDescriptor.name = "node_name";
+    nodeNameParameterDescriptor.description = "Name of the Camera Node.";
+    this->declare_parameter("node_name", "", nodeNameParameterDescriptor);
+
+    auto nodeName = this->get_parameter("node_name").as_string();
+
+    if(!nodeName.empty()){
+        RCLCPP_INFO(this->get_logger(), "Using camera node: %s", nodeName.c_str());
+    }
+    else{
+        nodeName = this->get_name();
+    }
+
+    rcl_interfaces::msg::ParameterDescriptor startUseCaseParameterDescriptor;
+    startUseCaseParameterDescriptor.name = "startUseCase";
+    startUseCaseParameterDescriptor.description = "Start Usecase.";
+    this->declare_parameter("startUseCase", "", startUseCaseParameterDescriptor);
+
+    auto startUsecase = this->get_parameter("startUseCase").as_string();
+
+    if(!startUsecase.empty()){
+        RCLCPP_INFO(this->get_logger(), "Using Usecase: %s", startUsecase.c_str());
+    }    
+
     rcl_interfaces::msg::ParameterDescriptor recFileParameterDescriptor;
     recFileParameterDescriptor.name = "recording_file";
     recFileParameterDescriptor.description = "Recording file that should be used.";
@@ -73,6 +103,9 @@ CameraNode::CameraNode(const rclcpp::NodeOptions &options)
     }
     m_serial = this->get_parameter("serial").as_string();
 
+    int numCamsConnected = cameraList.size(); 
+    RCLCPP_INFO(this->get_logger(), "%d cameras found!", numCamsConnected);
+
     m_cameraDevice = manager.createCamera(m_serial);
     if (m_cameraDevice) {
         RCLCPP_INFO(this->get_logger(), "Connected camera serial : %s", m_serial.c_str());
@@ -81,7 +114,7 @@ CameraNode::CameraNode(const rclcpp::NodeOptions &options)
         return;
     }
 
-    if (m_cameraDevice->initialize() != CameraStatus::SUCCESS) {
+    if (m_cameraDevice->initialize(m_startUseCase) != CameraStatus::SUCCESS) {
         RCLCPP_ERROR(this->get_logger(), "Error initializing the camera!");
         return;
     }
@@ -192,8 +225,6 @@ CameraNode::CameraNode(const rclcpp::NodeOptions &options)
     m_updateDataListenersTimer = this->create_wall_timer(std::chrono::milliseconds(250),
                                                          std::bind(&CameraNode::updateDataListeners, this));
     m_updateDataListenersTimer->call();
-
-    std::string nodeName = this->get_name();
 
     // Advertise our point cloud topic and image topics
     m_pubCameraInfo = this->create_publisher<sensor_msgs::msg::CameraInfo>(

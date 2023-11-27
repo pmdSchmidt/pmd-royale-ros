@@ -11,8 +11,10 @@
 #include "PMDRoyaleRVIZ.hpp"
 
 #include <QHBoxLayout>
+#include <QScrollArea>
 #include <QString>
 #include <functional>
+#include <QVBoxLayout>
 
 using namespace std::chrono_literals;
 
@@ -22,7 +24,9 @@ PMDRoyaleRVIZ::PMDRoyaleRVIZ(QWidget *parent)
     : rviz_common::Panel(parent),
       m_cameraNode("/pmd_royale_ros_camera_node"),
       m_nh(rclcpp::Node::make_shared("PMDRoyaleRVIZ")) {
+    
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->setSizeConstraint(QLayout::SetMinimumSize);
 
     // Top section to specify camera node name
     QVBoxLayout *topLayout = new QVBoxLayout();

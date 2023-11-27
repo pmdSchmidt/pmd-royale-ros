@@ -16,7 +16,7 @@ namespace pmd_royale_ros_examples {
 
 CameraControlWidget::CameraControlWidget(std::shared_ptr<rclcpp::Node> node, std::string cameraNodeName,
                                          QWidget *parent)
-    : QWidget(parent), CameraParametersClient(node, cameraNodeName), m_nh(node) {
+    : QWidget(parent), CameraParametersClient(node, cameraNodeName), m_nh(node), m_isInit(false) {
     QVBoxLayout *controlLayout = new QVBoxLayout(this);
     // Use Case
     controlLayout->addWidget(new QLabel("Use Case:"));
@@ -57,10 +57,37 @@ CameraControlWidget::CameraControlWidget(std::shared_ptr<rclcpp::Node> node, std
 
         setLayout(controlLayout);
 
+        std::map<std::string, std::vector<std::string>> topicInfos = node->get_topic_names_and_types();
+
+        controlLayout->addWidget(new QLabel("Camera:"));
+        m_cams = new QComboBox;
+
+        std::set<std::string> cameras;
+
+        for (auto curTopic : topicInfos) {
+            if (curTopic.first.find("royale_cam_") != std::string::npos) {
+                auto div = curTopic.first.find("/", 1);
+                if (div != std::string::npos) {
+                    auto camName = curTopic.first.substr(1, div - 1);
+                    cameras.insert(camName);
+                }
+            }
+        }
+
+        for (auto curCam : cameras) {
+            std::cout << "cam: " << curCam.c_str() << std::endl;
+            m_cams->addItem(curCam.c_str());
+        }
+
+        controlLayout->addWidget(m_cams);
+
         connect(m_sliderExpoTime[i], &QSlider::valueChanged, this, [this, i](int val) { setExposureTime(val, i); });
         connect(m_checkBoxAutoExpo[i], &QCheckBox::toggled, this, [this, i](bool val) { setExposureMode(val, i); });
         connect(m_lineEditExpoTime[i], &QLineEdit::editingFinished, this, [this, i](void) { preciseExposureTimeSetting(i); });
         connect(m_lineEditParams[i], &QLineEdit::editingFinished, this, [this, i](void) { setProcParameter(i); });
+        connect(m_cams, SIGNAL(currentIndexChanged(int)), this, SLOT(chooseCamera(int)));
+
+        m_cams->currentIndexChanged(0);
     }
     subscribeForCameraParameters({"available_usecases", "usecase",
                                   "gray_image_divisor", "min_distance_filter", "max_distance_filter"});
@@ -72,6 +99,116 @@ CameraControlWidget::CameraControlWidget(std::shared_ptr<rclcpp::Node> node, std
 }
 
 CameraControlWidget::~CameraControlWidget() {}
+
+void CameraControlWidget::chooseCamera(int idx) {
+    std::string curCam = m_cams->itemText(idx).toStdString();
+
+    // Advertise the topics to publish the message of the changed settings in the UI
+    m_pubIsInit = m_nh->create_publisher<std_msgs::msg::String>(curCam + "/is_init", 1);
+    m_pubUseCase = m_nh->create_publisher<std_msgs::msg::String>(curCam + "/use_case", 1);
+    m_pubMinFilter = m_nh->create_publisher<std_msgs::msg::String>(curCam + "/min_filter", 1);
+    m_pubMaxFilter = m_nh->create_publisher<std_msgs::msg::String>(curCam + "/max_filter", 1);
+    m_pubDivisor = m_nh->create_publisher<std_msgs::msg::String>(curCam + "/divisor", 1);
+    for (auto i = 0u; i < ROYALE_ROS_MAX_STREAMS; ++i) {
+        m_pubExpoTime[i] = m_nh->create_publisher<std_msgs::msg::String>(std::string(curCam + "/expo_time_") + std::to_string(i), 1);
+        m_pubExpoMode[i] = m_nh->create_publisher<std_msgs::msg::String>(std::string(curCam + "/expo_mode_") + std::to_string(i), 1);
+        m_pubParams[i] = m_nh->create_publisher<std_msgs::msg::String>(std::string(curCam + "/params_") + std::to_string(i), 1);
+    }
+
+    // Subscribe the messages to show the changed state of the camera
+    m_subInit = m_nh->create_subscription<std_msgs::msg::String>(curCam + "/init_panel", 1, std::bind(&CameraControlWidget::callbackInit, this, std::placeholders::_1));
+
+    for (auto i = 0u; i < ROYALE_ROS_MAX_STREAMS; ++i) {
+        std::function<void(const std_msgs::msg::String::SharedPtr msg)> f_expoP = std::bind(&CameraControlWidget::callbackExpoTimeParam, this, std::placeholders::_1, i);
+        std::function<void(const std_msgs::msg::String::SharedPtr msg)> f_expoV = std::bind(&CameraControlWidget::callbackExpoTimeParam, this, std::placeholders::_1, i);
+        std::function<void(const std_msgs::msg::String::SharedPtr msg)> f_fps = std::bind(&CameraControlWidget::callbackExpoTimeParam, this, std::placeholders::_1, i);
+
+        m_subExpoTimeParam[i] = m_nh->create_subscription<std_msgs::msg::String>(curCam + "/expo_time_param_" + std::to_string(i), 1, f_expoP);
+        m_subExpoTimeValue[i] = m_nh->create_subscription<std_msgs::msg::String>(curCam + "/expo_time_value_" + std::to_string(i), 1, f_expoV);
+        m_subFps[i] = m_nh->create_subscription<std_msgs::msg::String>(curCam + "/update_fps_" + std::to_string(i), 1, f_fps);
+    }
+
+    // Publish the message to indicate that the initialization is complete
+    m_isInit = false;
+    std_msgs::msg::String msg;
+    msg.data = m_isInit;
+    m_pubIsInit->publish(msg);
+}
+
+void CameraControlWidget::callbackInit(const std_msgs::msg::String::SharedPtr msg) {
+    if (!m_isInit) {
+        QString str = msg->data.c_str();
+        QStringList initList = str.split('/');
+
+        m_currentUseCase = initList.at(0);
+
+        float min = initList.at(1).toFloat();
+        m_sliderMinFilter->blockSignals(true);
+        m_sliderMinFilter->setValue((int)(min * 100));
+        m_sliderMinFilter->blockSignals(false);
+        m_lineEditMinFilter->setText(QString::number(min, 10, 2));
+
+        float max = initList.at(2).toFloat();
+        m_sliderMaxFilter->blockSignals(true);
+        m_sliderMaxFilter->setValue((int)(max * 100));
+        m_sliderMaxFilter->blockSignals(false);
+        m_lineEditMaxFilter->setText(QString::number(max, 10, 2));
+
+        m_sliderDivisor->blockSignals(true);
+        m_sliderDivisor->setValue(initList.at(3).toInt());
+        m_sliderDivisor->blockSignals(false);
+        m_lineEditDivisor->setText(initList.at(3));
+
+        m_comboBoxUseCases->blockSignals(true);
+        m_comboBoxUseCases->clear();
+        for (int i = 4; i < initList.size(); ++i) {
+            m_comboBoxUseCases->addItem(initList.at(i));
+        }
+        auto cmbIdx = m_comboBoxUseCases->findText(m_currentUseCase);
+        if (cmbIdx != -1) {
+            m_comboBoxUseCases->setCurrentIndex(cmbIdx);
+        }
+        m_comboBoxUseCases->blockSignals(false);
+
+        // Publish the message to indicate that the initialization is complete
+        m_isInit = true;
+        std_msgs::msg::String msg;
+        msg.data = m_isInit;
+        m_pubIsInit->publish(msg);
+    }
+}
+
+void CameraControlWidget::callbackExpoTimeParam(const std_msgs::msg::String::SharedPtr msg, uint32_t streamIdx) {
+    QString str = msg->data.c_str();
+    m_minETSlider[streamIdx] = str.section('/', 0, 0).toInt();
+    m_maxETSlider[streamIdx] = str.section('/', 1, 1).toInt();
+    m_sliderExpoTime[streamIdx]->blockSignals(true);
+    m_sliderExpoTime[streamIdx]->setRange(m_minETSlider[streamIdx], m_maxETSlider[streamIdx]);
+    m_sliderExpoTime[streamIdx]->blockSignals(false);
+
+    m_labelExpoTime[streamIdx]->setText("Exposure Time (" + QString::number(m_minETSlider[streamIdx]) + " - " + QString::number(m_maxETSlider[streamIdx]) + "):");
+
+    m_isAutomatic[streamIdx] = str.section('/', 2, 2).toInt();
+    m_checkBoxAutoExpo[streamIdx]->blockSignals(true);
+    m_checkBoxAutoExpo[streamIdx]->setChecked(m_isAutomatic[streamIdx]);
+    m_checkBoxAutoExpo[streamIdx]->blockSignals(false);
+    m_lineEditExpoTime[streamIdx]->setEnabled(!m_isAutomatic[streamIdx]);
+}
+
+void CameraControlWidget::callbackExpoTimeValue(const std_msgs::msg::String::SharedPtr msg, uint32_t streamIdx) {
+    int value = std::stoi(msg->data);
+    m_sliderExpoTime[streamIdx]->blockSignals(true);
+    m_sliderExpoTime[streamIdx]->setValue(value);
+    m_sliderExpoTime[streamIdx]->blockSignals(false);
+
+    m_exposureTime[streamIdx] = value;
+    m_lineEditExpoTime[streamIdx]->setText(QString::number(m_exposureTime[streamIdx]));
+}
+
+void CameraControlWidget::callbackFps(const std_msgs::msg::String::SharedPtr msg, uint32_t streamIdx) {
+    QString fps = msg->data.c_str();
+    m_labelEditFps[streamIdx]->setText("Frames per Second: " + fps);
+}
 
 void CameraControlWidget::onNewCameraParameter(const CameraParameter &cameraParam) {
     auto param = cameraParam.parameter;

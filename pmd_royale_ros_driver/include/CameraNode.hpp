@@ -90,7 +90,11 @@ class CameraNode : public rclcpp::Node,
     // Parameters
     std::string m_serial;
     std::string m_model;
+    std::string m_cam_name;
+    std::string m_node_name;
+    std::string m_startUseCase;
     std::string m_currentUseCase;
+    std::string m_cam_access_code;
     int64_t m_exposureTime[ROYALE_ROS_MAX_STREAMS];
     bool m_isAutoExposureEnabled[ROYALE_ROS_MAX_STREAMS];
     bool m_isPubCloud;
